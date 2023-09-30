@@ -57,6 +57,7 @@ exit /b
     "%temp%\getadmin.vbs"
     exit
 
+
 :gotAdmin
 if exist "%temp%\getadmin.vbs" ( del "%temp%\getadmin.vbs" )
 pushd "%CD%"
