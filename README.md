@@ -18,3 +18,6 @@ Firewall Rule: Allowing LAN connections to port 5000
 
 Choose an option:
 ```
+
+# Credits
+Thanks to ChatGPT :)
