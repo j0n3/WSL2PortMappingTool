@@ -14,29 +14,71 @@ echo Firewall Rules and Port Forwardings for WSL2
 echo --------------------------------------------------
 set "hasRules=0"
 call :displayRules
-
 echo.
 echo 1) Create new rule and port forwarding
 if "%hasRules%"=="1" echo 2) Delete an existing rule
-echo 3) Exit
+echo 3) Display Firewall Rule for port
+echo 4) Display all Firewall rules "%ruleNamePattern% *"
+echo 5) Display all port forwardings
+echo 0) Exit
 echo.
 set /p option="Choose an option: "
 goto option-%option% 2>nul
 goto menu
 
 
+:option-0
+    exit
+
 :option-1
     call :createRule
     goto menu
-
 
 :option-2
     call :deleteRule
     goto menu
 
-
 :option-3
-    exit
+    call :displayFirewallRuleForPort
+    goto menu
+
+:option-4
+    call :displayAllFirewallRuleNamePattern
+    goto menu
+
+:option-5
+    call :displayPortForwardings
+    goto menu
+
+
+
+:displayPortForwardings
+netsh interface portproxy show all
+echo.
+pause
+goto menu
+
+
+:displayFirewallRuleForPort
+set /p port="Enter the port number for which you want to see the firewall rules: "
+if not defined port (
+    echo No port number provided.
+    pause
+    goto menu
+)
+
+echo.
+echo Showing firewall rules for port %port%:
+echo --------------------------------------------------
+netsh advfirewall firewall show rule name="%ruleNamePattern% %port%"
+echo.
+pause
+goto menu
+
+:displayAllFirewallRuleNamePattern
+netsh advfirewall firewall show rule name=all | find "%ruleNamePattern%"
+echo.
+pause
 
 
 :checkAdmin
@@ -57,6 +99,7 @@ exit /b
     "%temp%\getadmin.vbs"
     exit
 
+
 :gotAdmin
 if exist "%temp%\getadmin.vbs" ( del "%temp%\getadmin.vbs" )
 pushd "%CD%"
@@ -65,7 +108,7 @@ exit /b
 
 
 :displayRules
-:: Paso 1: Crear una lista de todos los puertos de las reglas de firewall que hemos creado
+:: Step 1: Create firewall rules ports list
 set "portsList="
 for /f "tokens=*" %%l in ('netsh advfirewall firewall show rule name^=all ^| find "%ruleNamePattern%"') do (
     for %%p in (%%l) do set "portNum=%%p"
@@ -73,12 +116,12 @@ for /f "tokens=*" %%l in ('netsh advfirewall firewall show rule name^=all ^| fin
     set "hasRules=1"
 )
 
-:: Paso 2: Para cada puerto en esa lista, extraer todos los forwardings asociados
+:: Paso 2: Find firewall rule port and matching port forwardings
 for %%p in (%portsList%) do (
     if not "%%p"=="" (
         echo Firewall Rule: %ruleNamePattern% %%p
         for /f "tokens=1,2,3,4" %%a in ('netsh interface portproxy show all ^| findstr /C:"%%p"') do (
-            echo       %%a:%%b to %%c:%%d
+            echo     %%a:%%b to %%c:%%d
         )
         echo.
     )
@@ -100,27 +143,31 @@ exit /b
 :createRule
 set defaultLocalPort=5000
 set defaultWslPort=5000
-set defaultListenAddress=0.0.0.0
+set defaultListenIP=0.0.0.0
+set defaultRemoteIP=any
 
 :: Reset user input values
 set "localPort="
 set "wslPort="
-set "listenAddress="
+set "listenIP="
+set "remoteIP="
 
 call :getUserInput "Enter the local port (default: %defaultLocalPort%): " localPort %defaultLocalPort%
 call :getUserInput "Enter the WSL2 port (default: %defaultWslPort%): " wslPort %defaultWslPort%
-call :getUserInput "Enter a valid listenAddress (default: %defaultListenAddress%): " listenAddress %defaultListenAddress%
+call :getUserInput "Enter the listen IP (default: %defaultListenIP%): " listenIP %defaultListenIP%
+call :getUserInput "Enter the remote IP or mask (default: %defaultRemoteIP%): " remoteIP %defaultRemoteIP%
 
 :: If user pressed escape
 if "%localPort%"=="ESC" goto menu
 if "%wslPort%"=="ESC" goto menu
-if "%listenAddress%"=="ESC" goto menu
+if "%listenIP%"=="ESC" goto menu
+if "%remoteIP%"=="ESC" goto menu
 
 call :ruleExists %localPort%
 if "%ruleExists%"=="0" (
-    netsh advfirewall firewall add rule name="%ruleNamePattern% %localPort%" dir=in action=allow protocol=TCP localport=%localPort%
+    netsh advfirewall firewall add rule name="%ruleNamePattern% %localPort%" dir=in action=allow protocol=TCP localport=%localPort% remoteip=%remoteIP%
 )
-netsh interface portproxy add v4tov4 listenaddress=%listenAddress% listenport=%localPort% connectaddress=localhost connectport=%wslPort%
+netsh interface portproxy add v4tov4 listenaddress=%listenIP% listenport=%localPort% connectaddress=localhost connectport=%wslPort%
 goto menu
 
 
@@ -146,10 +193,10 @@ for /f "tokens=1,2" %%a in ('netsh interface portproxy show all ^| findstr /C:" 
 :: If there's only one forwarding, delete it
 if "%count%"=="1" (
     for /f "tokens=1,2" %%a in ('netsh interface portproxy show all ^| findstr /C:" %choice% "') do (
-        set detectedlistenAddress=%%a
+        set detectedListenIP=%%a
         set detectedPort=%%b
     )
-    netsh interface portproxy delete v4tov4 listenaddress=!detectedlistenAddress! listenport=!detectedPort!
+    netsh interface portproxy delete v4tov4 listenaddress=!detectedListenIP! listenport=!detectedPort!
     netsh advfirewall firewall delete rule name="%ruleNamePattern% %choice%"
     goto menu
 )
@@ -160,33 +207,29 @@ echo Multiple forwardings detected for port %choice%. Choose one to delete:
 set "index=1"
 for /f "tokens=1,2" %%a in ('netsh interface portproxy show all ^| findstr /C:" %choice% "') do (
     echo !index!^) %%a:%%b
-    set "listenAddress!index!=%%a"
+    set "listenIP!index!=%%a"
     set "port!index!=%%b"
     set /a index+=1
 )
 set allIndex=!index!
 echo !allIndex!^) Delete all forwardings for port %choice%
 echo.
-set /p listenAddressChoice="Enter the number of the forwarding you wish to delete or !allIndex! to delete all: "
+set /p listenIPChoice="Enter the number of the forwarding you wish to delete or !allIndex! to delete all: "
 
-if "%listenAddressChoice%"=="!allIndex!" (
+if "%listenIPChoice%"=="!allIndex!" (
     for /l %%i in (1,1,!allIndex!) do (
-        if defined listenAddress%%i (
-            netsh interface portproxy delete v4tov4 listenaddress=!listenAddress%%i! listenport=%choice%
+        if defined listenIP%%i (
+            netsh interface portproxy delete v4tov4 listenaddress=!listenIP%%i! listenport=%choice%
         )
     )
     netsh advfirewall firewall delete rule name="%ruleNamePattern% %choice%"
     goto menu
 ) else (
-    set detectedlistenAddress=!listenAddress%listenAddressChoice%!
-    set detectedPort=!port%listenAddressChoice%!
-    echo [DEBUG] Deleting specific forwarding: !detectedlistenAddress!:!detectedPort!
-    netsh interface portproxy delete v4tov4 listenaddress=!detectedlistenAddress! listenport=!detectedPort!
+    set detectedListenIP=!listenIP%listenIPChoice%!
+    set detectedPort=!port%listenIPChoice%!
+    netsh interface portproxy delete v4tov4 listenaddress=!detectedListenIP! listenport=!detectedPort!
     goto menu
 )
-set detectedlistenAddress=!listenAddress%listenAddressChoice%!
-netsh interface portproxy delete v4tov4 listenaddress=%detectedlistenAddress% listenport=%choice%
-goto menu
 
 
 :getUserInput
